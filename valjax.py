@@ -23,15 +23,14 @@ def address(x, i, axis=-1):
 def argmax(x, axis=-1):
     # take care of singleton case
     if type(axis) is int:
-        return np.argmax(x, axis=axis)
+        axis = [axis]
 
     # shuffle axes to end
     K = len(axis)
     xs = np.moveaxis(x, axis, range(-K, 0))
 
     # flatten max axes
-    sN = xs.shape[:-K]
-    sK = xs.shape[-K:]
+    sN, sK = xs.shape[:-K], xs.shape[-K:]
     xf = np.reshape(xs, sN+(-1,))
 
     # get maxes and reshape
