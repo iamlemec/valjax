@@ -1,33 +1,51 @@
 import jax
 import jax.numpy as np
-from math import prod
 
-# take element by element on axis=-1
-# x: [N..., K]
-# i: [N...]
+from math import prod
+from operator import mul
+from itertools import accumulate
+
+def get_strides(shape):
+    return tuple(accumulate(shape[-1:0:-1], mul, initial=1))[::-1]
+
+# index: [N, K] matrix or tuple of K [N] vectors
+def ravel_index(index, shape):
+    idxmat = np.stack(index, axis=-1)
+    stride = np.array(get_strides(shape))
+    return np.dot(idxmat, stride)
+
+# take element by element on axis
+# includes bounds checking
+# x: [N..., M...]
+# i: tuple of len(M) [N...]
 # r: [N...]
-def address0(x, i):
-    sN = prod(i.shape)
-    sK = x.shape[-1]
-    ic = sK*np.arange(sN) + i.flatten()
-    zc = np.take(x, ic)
-    return zc.reshape(i.shape)
+def address0(x, iv):
+    K = len(iv)
+    sN, sM = x.shape[:-K], x.shape[-K:]
+    lN, lM = prod(sN), prod(sM)
+
+    ic = [np.clip(i, 0, n-1) for i, n in zip(iv, sM)]
+    ix = lM*np.arange(lN) + ravel_index(ic, sM)
+
+    y0 = np.take(x, ix)
+    y = np.reshape(y0, sN)
+
+    return y
 
 # generalized axis
-def address(x, i, axis=-1):
-    x1 = x.swapaxes(-1, axis)
-    y = address0(x1, i)
+def address(x, iv, axis):
+    K = len(axis)
+    end = range(-K, 0)
+    xs = np.moveaxis(x, axis, end)
+    y = address0(xs, iv)
     return y
 
 # multi-dimensional argmax
-def argmax(x, axis=-1):
-    # take care of singleton case
-    if type(axis) is int:
-        axis = [axis]
-
+def argmax(x, axis):
     # shuffle axes to end
     K = len(axis)
-    xs = np.moveaxis(x, axis, range(-K, 0))
+    end = range(-K, 0)
+    xs = np.moveaxis(x, axis, end)
 
     # flatten max axes
     sN, sK = xs.shape[:-K], xs.shape[-K:]
@@ -40,32 +58,43 @@ def argmax(x, axis=-1):
     return iv
 
 # get the smooth index of the maximum (quadratic)
-def smoothmax(x, δ, axis=-1):
-    i0 = argmax(x, axis=axis)
+def smoothmax(x, axis):
+    i0 = argmax(x, axis)
+    y0 = address(x, i0, axis)
+    ir = []
 
-    n = x.shape[axis]
-    im = np.clip(i0-1, 0, n-1)
-    ip = np.clip(i0+1, 0, n-1)
+    for k, ax in enumerate(axis):
+        n = x.shape[ax]
 
-    y0 = address(y, i0, axis=axis)
-    ym = address(y, im, axis=axis)
-    yp = address(y, ip, axis=axis)
+        im = [ix - 1 if j == k else ix for j, ix in enumerate(i0)]
+        ip = [ix + 1 if j == k else ix for j, ix in enumerate(i0)]
 
-    dm = y0 - ym
-    dp = y0 - yp
+        ym = address(x, im, axis)
+        yp = address(x, ip, axis)
 
-    return i0 + (1/2)*(dm-dp)/(dm+dp)
+        dm = y0 - ym
+        dp = y0 - yp
 
-# interpolate a continuous index
-def interp(y, i, axis=-1):
-    n = y.shape[0]
+        ik0 = i0[k] + (1/2)*(dm-dp)/(dm+dp)
+        ik = np.clip(ik0, 0, n-1)
+        ir.append(ik)
 
-    i0 = np.floor(i).astype(np.int32)
-    ilo = np.clip(i0, 0, n-1)
-    ihi = np.clip(ilo + 1, 0, n-1)
-    t = i - ilo
+    return tuple(ir)
 
-    ylo = address(y, ilo, axis=axis)
-    yhi = address(y, ihi, axis=axis)
+# interpolate a continuous index (linear)
+def interp(y, iv, axis):
+    i0 = [np.floor(i).astype(np.int32) for i in iv]
+    y0 = address(y, i0, axis)
 
-    return t*yhi + (1-t)*ylo
+    vr = y0
+
+    for k, ax in enumerate(axis):
+        n = y.shape[ax]
+        i0k, ivk = i0[k], iv[k]
+
+        i1 = [i0k + 1 if j == k else ix for j, ix in enumerate(i0)]
+        y1 = address(y, i1, axis=axis)
+
+        vr += (ivk-i0k) * (y1-y0)
+
+    return vr
