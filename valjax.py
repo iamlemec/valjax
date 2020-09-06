@@ -14,18 +14,18 @@ def ravel_index(index, shape):
     stride = np.array(get_strides(shape))
     return np.dot(idxmat, stride)
 
-# take element by element on axis
+# for each element in left space (N), take elements in right space (M)
 # includes bounds checking
-# x: [N..., M...]
-# i: tuple of len(M) [N...]
-# r: [N...]
+# x  : [N..., M...]
+# iv : tuple of len(M) [N...]
+# ret: [N...]
 def address0(x, iv):
     K = len(iv)
     sN, sM = x.shape[:-K], x.shape[-K:]
     lN, lM = prod(sN), prod(sM)
 
     ic = [np.clip(i, 0, n-1) for i, n in zip(iv, sM)]
-    ix = lM*np.arange(lN) + ravel_index(ic, sM)
+    ix = lM*np.arange(lN) + ravel_index(ic, sM).flatten()
 
     y0 = np.take(x, ix)
     y = np.reshape(y0, sN)
@@ -81,20 +81,39 @@ def smoothmax(x, axis):
 
     return tuple(ir)
 
-# interpolate a continuous index (linear)
-def interp(y, iv, axis):
+# interpolate a continuous index (linear) along given axes
+# x  : [N..., M...]
+# iv : tuple of len(M) [N...]
+# ret: [N...]
+def interp_address(y, iv, axis):
     i0 = [np.floor(i).astype(np.int32) for i in iv]
     y0 = address(y, i0, axis)
 
     vr = y0
 
     for k, ax in enumerate(axis):
-        n = y.shape[ax]
         i0k, ivk = i0[k], iv[k]
-
         i1 = [i0k + 1 if j == k else ix for j, ix in enumerate(i0)]
-        y1 = address(y, i1, axis=axis)
 
+        y1 = address(y, i1, axis)
+        vr += (ivk-i0k) * (y1-y0)
+
+    return vr
+
+# akin to continuous array indexing
+# requires len(iv) == x.ndim
+# return shape is that of iv's
+def interp(x, iv):
+    i0 = [np.floor(i).astype(np.int32) for i in iv]
+    y0 = x[i0]
+
+    vr = y0
+
+    for k in range(x.ndim):
+        i0k, ivk = i0[k], iv[k]
+        i1 = [i0k + 1 if j == k else ix for j, ix in enumerate(i0)]
+
+        y1 = x[i1]
         vr += (ivk-i0k) * (y1-y0)
 
     return vr
