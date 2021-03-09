@@ -13,12 +13,20 @@ def ravel_index(index, shape, np=npx):
     stride = np.array(get_strides(shape))
     return np.dot(idxmat, stride)
 
+def ensure_tuple(x):
+    if type(x) not in (tuple, list):
+        return (x,)
+    else:
+        return x
+
 # for each element in left space (N), take elements in right space (M)
 # includes bounds checking
 # x  : [N..., M...]
 # iv : tuple of len(M) [N...]
 # ret: [N...]
 def address0(x, iv, np=npx):
+    iv = ensure_tuple(iv)
+
     K = len(iv)
     sN, sM = x.shape[:-K], x.shape[-K:]
     lN, lM = prod(sN), prod(sM)
@@ -33,14 +41,23 @@ def address0(x, iv, np=npx):
 
 # generalized axis
 def address(x, iv, axis, np=npx):
+    iv = ensure_tuple(iv)
+    axis = ensure_tuple(axis)
+
+    # shuffle axes to end
     K = len(axis)
     end = range(-K, 0)
     xs = np.moveaxis(x, axis, end)
+
+    # perform on last axis
     y = address0(xs, iv, np=np)
+
     return y
 
 # multi-dimensional argmax
 def argmax(x, axis, np=npx):
+    axis = ensure_tuple(axis)
+
     # shuffle axes to end
     K = len(axis)
     end = range(-K, 0)
@@ -58,6 +75,8 @@ def argmax(x, axis, np=npx):
 
 # get the smooth index of the maximum (quadratic)
 def smoothmax(x, axis, np=npx):
+    axis = ensure_tuple(axis)
+
     i0 = argmax(x, axis, np=np)
     y0 = address(x, i0, axis, np=np)
     ir = []
@@ -85,13 +104,17 @@ def smoothmax(x, axis, np=npx):
 # iv : tuple of len(M) [N...]
 # ret: [N...]
 def interp_address(y, iv, axis, extrap=True, np=npx):
+    iv = ensure_tuple(iv)
+    axis = ensure_tuple(axis)
+    shape = [y.shape[a] for a in axis]
+
     if extrap:
         i0 = [
             np.clip(np.floor(i), 0, n-2).astype(np.int32)
-            for i, n in zip(iv, x.shape)
+            for i, n in zip(iv, shape)
         ]
     else:
-        iv = [np.clip(i, 0, n-1) for i, n in zip(iv, x.shape)]
+        iv = [np.clip(i, 0, n-1) for i, n in zip(iv, shape)]
         i0 = [np.floor(i).astype(np.int32) for i in iv]
 
     y0 = address(y, i0, axis, np=np)
@@ -111,6 +134,8 @@ def interp_address(y, iv, axis, extrap=True, np=npx):
 # requires len(iv) == x.ndim
 # return shape is that of iv's
 def interp(x, iv, extrap=True, np=npx):
+    iv = ensure_tuple(iv)
+
     if extrap:
         i0 = [
             np.clip(np.floor(i), 0, n-2).astype(np.int32)
