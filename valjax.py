@@ -84,8 +84,16 @@ def smoothmax(x, axis, np=npx):
 # x  : [N..., M...]
 # iv : tuple of len(M) [N...]
 # ret: [N...]
-def interp_address(y, iv, axis, np=npx):
-    i0 = [np.floor(i).astype(np.int32) for i in iv]
+def interp_address(y, iv, axis, extrap=True, np=npx):
+    if extrap:
+        i0 = [
+            np.clip(np.floor(i), 0, n-2).astype(np.int32)
+            for i, n in zip(iv, x.shape)
+        ]
+    else:
+        iv = [np.clip(i, 0, n-1) for i, n in zip(iv, x.shape)]
+        i0 = [np.floor(i).astype(np.int32) for i in iv]
+
     y0 = address(y, i0, axis, np=np)
 
     vr = y0
@@ -102,8 +110,16 @@ def interp_address(y, iv, axis, np=npx):
 # akin to continuous array indexing
 # requires len(iv) == x.ndim
 # return shape is that of iv's
-def interp(x, iv, np=npx):
-    i0 = [np.floor(i).astype(np.int32) for i in iv]
+def interp(x, iv, extrap=True, np=npx):
+    if extrap:
+        i0 = [
+            np.clip(np.floor(i), 0, n-2).astype(np.int32)
+            for i, n in zip(iv, x.shape)
+        ]
+    else:
+        iv = [np.clip(i, 0, n-1) for i, n in zip(iv, x.shape)]
+        i0 = [np.floor(i).astype(np.int32) for i in iv]
+
     y0 = x[tuple(i0)]
 
     vr = y0
