@@ -138,7 +138,7 @@ def interp_address(y, iv, axis, extrap=True):
 
 # akin to continuous array indexing
 # requires len(iv) == x.ndim
-# return shape is that of iv's
+# return shape is that of iv components
 def interp(x, iv, extrap=True):
     iv = ensure_tuple(iv)
 
@@ -163,6 +163,18 @@ def interp(x, iv, extrap=True):
         vr += (ivk-i0k) * (y1-y0)
 
     return vr
+
+# find the continuous (linearly interpolated) index of value v on grid g
+# requires monotonically incrasing g
+# inverse of interp, basically
+# just 1d for now, easy to endify
+def grid_index(g, v):
+    n = len(g)
+    i1 = np.sum(v >= g)
+    i0 = i1 - 1
+    g0, g1 = g[i0], g[i1]
+    x = (v-g0)/(g1-g0)
+    return i0 + x
 
 # state-only iteration
 def iterate(func, st0, T, hist=True):
