@@ -2,9 +2,13 @@ from math import prod
 from operator import mul
 from itertools import accumulate
 
+import jax
 import jax.numpy as np
-from jax import tree_map
-from jax.lax import scan
+import jax.lax as lax
+
+##
+## indexing tricks
+##
 
 def get_strides(shape):
     return tuple(accumulate(shape[-1:0:-1], mul, initial=1))[::-1]
@@ -21,9 +25,17 @@ def ensure_tuple(x):
     else:
         return x
 
+##
+## special functions
+##
+
 # classic bounded smoothstep
 def smoothstep(x):
     return np.where(x > 0, np.where(x < 1, 3*x**2 - 2*x**3, 1), 0)
+
+##
+## indexing routines
+##
 
 # for each element in left space (N), take elements in right space (M)
 # includes bounds checking
@@ -59,6 +71,10 @@ def address(x, iv, axis):
     y = address0(xs, iv)
 
     return y
+
+##
+## discrete maximizers
+##
 
 # multi-dimensional argmax
 def argmax(x, axis):
@@ -105,6 +121,10 @@ def smoothmax(x, axis):
 
     return tuple(ir)
 
+##
+## interpolation
+##
+
 # interpolate a continuous index (linear) along given axes
 # x  : [N..., M...]
 # iv : tuple of len(M) [N...]
@@ -139,6 +159,7 @@ def interp_address(y, iv, axis, extrap=True):
 # akin to continuous array indexing
 # requires len(iv) == x.ndim
 # return shape is that of iv components
+# this is vmap-able
 def interp(x, iv, extrap=True):
     iv = ensure_tuple(iv)
 
@@ -167,20 +188,116 @@ def interp(x, iv, extrap=True):
 # find the continuous (linearly interpolated) index of value v on grid g
 # requires monotonically incrasing g
 # inverse of interp, basically
-# just 1d for now, easy to endify
+# this clamps to [0, n]
 def grid_index(g, v):
-    n = len(g)
-    i1 = np.sum(v >= g)
+    n = g.size
+    gx = g.reshape((n,)+(1,)*v.ndim)
+    vx = v.reshape((1,)+v.shape)
+
+    i = np.sum(vx >= gx, axis=0)
+    i1 = np.clip(i, 1, n-1)
     i0 = i1 - 1
+
     g0, g1 = g[i0], g[i1]
-    x = (v-g0)/(g1-g0)
+    x0 = (v-g0)/(g1-g0)
+    x = np.clip(x0, 0, 1)
     return i0 + x
+
+def gridbin_cond(x):
+    d, _ = x
+    return d > 0
+
+def gridbin_iter(g, v, x):
+    d, i = x
+    n = g.size
+    dd = -d
+    du = np.where(i + d < n, d, 0)
+    id = np.where(g[i] <= v, du, dd)
+    return d // 2, i + id
+
+# this sucks right now
+def grid_bin(g, v):
+    n1 = np.power(2, np.ceil(np.log2(g.size)).astype(np.int32))
+    d0 = n1 // 4
+    i0 = (n1 // 2)*np.ones_like(v, dtype=np.int32)
+
+    gridbin_body = jax.partial(gridbin_iter, g, v)
+    _, i = lax.while_loop(gridbin_cond, gridbin_body, (d0, i0))
+
+    i = np.maximum(1, i)
+    i0, i1 = i - 1, i
+    g0, g1 = g[i0], g[i1]
+
+    x0 = (v-g0)/(g1-g0)
+    x = np.clip(x0, 0, 1)
+
+    return i0 + x
+
+##
+## solvers
+##
+
+def solve_binary(f, x0, x1, K=10):
+    zx0, zx1 = x0, x1
+    zf0, zf1 = f(zx0), f(zx1)
+    sel = zf0 < zf1
+
+    x0 = np.where(sel, zx0, zx1)
+    x1 = np.where(sel, zx1, zx0)
+    f0 = np.where(sel, zf0, zf1)
+    f1 = np.where(sel, zf1, zf0)
+
+    for k in range(K):
+        xm = 0.5*(x0+x1)
+        fm = f(xm)
+        sel = fm > 0
+
+        x0 = np.where(sel, x0, xm)
+        x1 = np.where(sel, xm, x1)
+        f0 = np.where(sel, f0, fm)
+        f1 = np.where(sel, fm, f1)
+
+    return xm
+
+def solve_newton(f, df, x, K=10):
+    for k in range(K):
+        vf, vdf = f(x), df(x)
+        x = x - vf/vdf
+    return x
+
+def solve_combined(f, df, x0, x1, K=10):
+    x = solve_binary(f, x0, x1, K=K)
+    x = solve_newton(f, df, x, K=K)
+    return x
+
+##
+## continuous optimize
+##
+
+def optim_secant(df, x0, x1, K=5):
+    for k in range(K):
+        d0, d1 = df(x0), df(x1)
+        dd = d1 - d0
+        dx = np.where(dd == 0, 0.5*(x1-x0), d1*(x1-x0)/dd)
+        x2 = x1 - dx
+        x0, x1 = x1, x2
+    return x1
+
+def optim_newton(df, ddf, x, K=5):
+    for k in range(K):
+        d, dd = df(x), ddf(x)
+        x = x - d/dd
+    return x
+
+##
+## iteration
+##
 
 # state-only iteration
 def iterate(func, st0, T, hist=True):
     tvec = np.arange(T)
     dub = lambda x, _: 2*(func(x),)
-    last, path = scan(dub, st0, tvec)
+    last, path = lax.scan(dub, st0, tvec)
     if hist:
         return path
     else:
@@ -191,6 +308,6 @@ def simdiff(func, st0, Δ, T, hist=True):
     up = lambda x, d: x + Δ*d
     def update(st):
         dst = func(st)
-        stp = tree_map(up, st, dst)
+        stp = jax.tree_map(up, st, dst)
         return stp
     return iterate(update, st0, T, hist=hist)
