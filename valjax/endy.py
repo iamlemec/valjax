@@ -1,37 +1,10 @@
 from math import prod
-from operator import mul
-from itertools import accumulate
 
 import jax
 import jax.numpy as np
 import jax.lax as lax
 
-##
-## indexing tricks
-##
-
-def get_strides(shape):
-    return tuple(accumulate(shape[-1:0:-1], mul, initial=1))[::-1]
-
-# index: [N, K] matrix or tuple of K [N] vectors
-def ravel_index(index, shape):
-    idxmat = np.stack(index, axis=-1)
-    stride = np.array(get_strides(shape))
-    return np.dot(idxmat, stride)
-
-def ensure_tuple(x):
-    if type(x) not in (tuple, list):
-        return (x,)
-    else:
-        return x
-
-##
-## special functions
-##
-
-# classic bounded smoothstep
-def smoothstep(x):
-    return np.where(x > 0, np.where(x < 1, 3*x**2 - 2*x**3, 1), 0)
+from .tools import get_strides, ravel_index, ensure_tuple, smoothstep
 
 ##
 ## indexing routines
@@ -188,8 +161,7 @@ def interp(x, iv, extrap=True):
 # find the continuous (linearly interpolated) index of value v on grid g
 # requires monotonically incrasing g
 # inverse of interp, basically
-# this clamps to [0, n]
-def grid_index(g, v):
+def grid_index(g, v, extrap=False):
     n = g.size
     gx = g.reshape((n,)+(1,)*v.ndim)
     vx = v.reshape((1,)+v.shape)
@@ -200,36 +172,8 @@ def grid_index(g, v):
 
     g0, g1 = g[i0], g[i1]
     x0 = (v-g0)/(g1-g0)
-    x = np.clip(x0, 0, 1)
-    return i0 + x
-
-def gridbin_cond(x):
-    d, _ = x
-    return d > 0
-
-def gridbin_iter(g, v, x):
-    d, i = x
-    n = g.size
-    dd = -d
-    du = np.where(i + d < n, d, 0)
-    id = np.where(g[i] <= v, du, dd)
-    return d // 2, i + id
-
-# this sucks right now
-def grid_bin(g, v):
-    n1 = np.power(2, np.ceil(np.log2(g.size)).astype(np.int32))
-    d0 = n1 // 4
-    i0 = (n1 // 2)*np.ones_like(v, dtype=np.int32)
-
-    gridbin_body = jax.partial(gridbin_iter, g, v)
-    _, i = lax.while_loop(gridbin_cond, gridbin_body, (d0, i0))
-
-    i = np.maximum(1, i)
-    i0, i1 = i - 1, i
-    g0, g1 = g[i0], g[i1]
-
-    x0 = (v-g0)/(g1-g0)
-    x = np.clip(x0, 0, 1)
+    xc = np.clip(x0, 0, 1)
+    x = np.where(extrap, x0, xc)
 
     return i0 + x
 
@@ -283,10 +227,21 @@ def optim_secant(df, x0, x1, K=5):
         x0, x1 = x1, x2
     return x1
 
-def optim_newton(df, ddf, x, K=5):
+def optim_newton(df, ddf, x, clip=0.0, K=5):
     for k in range(K):
-        d, dd = df(x), ddf(x)
-        x = x - d/dd
+        dv, ddv = df(x), ddf(x)
+        d0 = -dv/ddv
+        dc = np.clip(d0, -clip, clip)
+        d = np.where(clip > 0.0, dc, d0)
+        x = x + d
+    return x
+
+def optim_grad(df, x, step=0.01, clip=0.0, K=10):
+    for k in range(K):
+        d0 = df(x)
+        dc = np.clip(d0, -clip, clip)
+        d = np.where(clip > 0.0, dc, d0)
+        x = x + step*d
     return x
 
 ##
