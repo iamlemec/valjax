@@ -1,5 +1,8 @@
 from operator import mul
 from itertools import accumulate
+from collections import OrderedDict
+from inspect import signature
+import toml
 
 import jax
 import jax.numpy as np
@@ -59,6 +62,17 @@ def spec_funcs(s):
     else:
         return s
 
+def argpos(fun, arg):
+    sig = signature(fun)
+    t = type(arg)
+    if t is str:
+        names = list(sig.parameters)
+        pos = names.index(arg)
+    elif t is int:
+        n = len(sig.parameters)
+        pos = arg + n if arg < 0 else arg
+    return pos
+
 # encode: map from true space to free space
 # decode: map from free space to true space
 class Spec:
@@ -70,3 +84,41 @@ class Spec:
 
     def decode(self, x):
         return tree.tree_map(lambda v, s: s[1](v), x, self.spec)
+
+    def decoder(self, fun0, arg=0):
+        pos = argpos(fun0, arg)
+        def fun1(*args, **kwargs):
+            args1 = (
+                self.decode(a) if i == pos else a for i, a in enumerate(args)
+            )
+            return fun0(*args1, **kwargs)
+        return fun1
+
+    def decodify(self, fun=None, arg=0):
+        if fun is None:
+            def decor(fun0):
+                return self.decoder(fun0, arg)
+            return decor
+        else:
+            return self.decoder(fun, arg)
+
+##
+## function tools
+##
+
+def partial(fun, *args, argnums=None):
+    nargs = len(args)
+    if argnums is None:
+        argnums = list(range(nargs))
+    elif type(argnums) is int:
+        argnums = [argnums]
+    assert(nargs == len(argnums))
+
+    def fun1(*args1, **kwargs1):
+        ntot = nargs + len(args1)
+        idx = [i for i in range(ntot) if i not in argnums]
+        idx1 = {j: i for i, j in enumerate(idx1)}
+        args2 = [args[i] if i in argnums else args1[idx1[i]]]
+        return fun(*args2, **kwargs1)
+
+    return fun1

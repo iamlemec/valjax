@@ -7,6 +7,12 @@ import jax.lax as lax
 from .tools import get_strides, ravel_index, ensure_tuple, smoothstep
 
 ##
+## constants
+##
+
+ϵ = 1e-7
+
+##
 ## indexing routines
 ##
 
@@ -99,7 +105,7 @@ def smoothmax(x, axis):
 ##
 
 # interpolate a continuous index (linear) along given axes
-# x  : [N..., M...]
+# y  : [N..., M...]
 # iv : tuple of len(M) [N...]
 # ret: [N...]
 def interp_address(y, iv, axis, extrap=True):
@@ -133,27 +139,27 @@ def interp_address(y, iv, axis, extrap=True):
 # requires len(iv) == x.ndim
 # return shape is that of iv components
 # this is vmap-able
-def interp(x, iv, extrap=True):
+def interp_index(g, iv, extrap=True):
     iv = ensure_tuple(iv)
 
     if extrap:
         i0 = [
             np.clip(np.floor(i), 0, n-2).astype(np.int32)
-            for i, n in zip(iv, x.shape)
+            for i, n in zip(iv, g.shape)
         ]
     else:
-        iv = [np.clip(i, 0, n-1) for i, n in zip(iv, x.shape)]
+        iv = [np.clip(i, 0, n-1) for i, n in zip(iv, g.shape)]
         i0 = [np.floor(i).astype(np.int32) for i in iv]
 
-    y0 = x[tuple(i0)]
+    y0 = g[tuple(i0)]
 
     vr = y0
 
-    for k in range(x.ndim):
+    for k in range(g.ndim):
         i0k, ivk = i0[k], iv[k]
-        i1 = [i0k + 1 if j == k else ix for j, ix in enumerate(i0)]
+        i1 = [i0k + 1 if j == k else ig for j, ig in enumerate(i0)]
 
-        y1 = x[tuple(i1)]
+        y1 = g[tuple(i1)]
         vr += (ivk-i0k) * (y1-y0)
 
     return vr
@@ -161,21 +167,32 @@ def interp(x, iv, extrap=True):
 # find the continuous (linearly interpolated) index of value v on grid g
 # requires monotonically incrasing g
 # inverse of interp, basically
-def grid_index(g, v, extrap=False):
+def grid_index(g, v, extrap=True):
     n = g.size
+    v = np.asarray(v)
+
     gx = g.reshape((n,)+(1,)*v.ndim)
     vx = v.reshape((1,)+v.shape)
 
-    i = np.sum(vx >= gx, axis=0)
-    i1 = np.clip(i, 1, n-1)
+    it = np.sum(vx >= gx, axis=0)
+    i1 = np.clip(it, 1, n-1)
     i0 = i1 - 1
 
     g0, g1 = g[i0], g[i1]
-    x0 = (v-g0)/(g1-g0)
-    xc = np.clip(x0, 0, 1)
-    x = np.where(extrap, x0, xc)
+    f0 = (v-g0)/(g1-g0)
+    ir = i0 + f0
 
-    return i0 + x
+    ic = np.clip(ir, 0, n-1)
+    i = np.where(extrap, ir, ic)
+
+    return i
+
+# only 1d interp (x0.ndim == 1)
+# output shape is x.shape
+def interp(x0, y0, x, extrap=True):
+    i = grid_index(x0, x, extrap=extrap)
+    y = interp_index(y0, i, extrap=extrap)
+    return y
 
 ##
 ## solvers
