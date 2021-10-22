@@ -1,8 +1,11 @@
 from math import prod
+from operator import mul, add
+from inspect import signature
 
 import jax
 import jax.numpy as np
 import jax.lax as lax
+from jax.tree_util import tree_map, tree_reduce
 
 from .tools import get_strides, ravel_index, ensure_tuple, smoothstep
 
@@ -231,6 +234,68 @@ def solve_combined(f, df, x0, x1, K=10):
     x = solve_newton(f, df, x, K=K)
     return x
 
+# assumes max_x f(x, α) form, x scalar
+def solver_diff_fwd(f, x0, x1, K=10):
+    sig = signature(f)
+    nargs = len(sig.parameters)
+    arg_idx = tuple(range(1, nargs))
+
+    f_x = jax.grad(f, argnums=0)
+    f_α = jax.grad(f, argnums=arg_idx)
+
+    @jax.custom_jvp
+    def solve(*α):
+        return solve_combined(
+            lambda x: f(x, *α),
+            lambda x: f_x(x, *α),
+            x0, x1, K=K
+        )
+
+    def dsolve(x, *α):
+        return tree_map(lambda a: -a/f_x(x, *α), f_α(x, *α))
+
+    @solve.defjvp
+    def solve_jvp(α, dα):
+        x = solve(*α)
+        ds = dsolve(x, *α)
+        primal_out = x
+        tangent_out = tree_reduce(add, tree_map(mul, ds, dα))
+        return primal_out, tangent_out
+
+    return solve
+
+# assumes f(x, α) = 0 form, x scalar
+def solver_diff_rev(f, x0, x1, K=10):
+    sig = signature(f)
+    nargs = len(sig.parameters)
+    arg_idx = tuple(range(1, nargs))
+
+    f_x = jax.grad(f, argnums=0)
+    f_α = jax.grad(f, argnums=arg_idx)
+
+    @jax.custom_vjp
+    def solve(*α):
+        return solve_combined(
+            lambda x: f(x, *α),
+            lambda x: f_x(x, *α),
+            x0, x1, K=K
+        )
+
+    def dsolve(x, *α):
+        return tree_map(lambda a: -a/f_x(x, *α), f_α(x, *α))
+
+    def solve_fwd(*α):
+        x = solve(*α)
+        return x, (α, x)
+
+    def solve_bwd(res, g):
+        α, x = res
+        ds = dsolve(x, *α)
+        return tree_map(lambda v: v*g, ds)
+
+    solve.defvjp(solve_fwd, solve_bwd)
+    return solve
+
 ##
 ## continuous optimize
 ##
@@ -280,6 +345,6 @@ def simdiff(func, st0, Δ, T, hist=True):
     up = lambda x, d: x + Δ*d
     def update(st):
         dst = func(st)
-        stp = jax.tree_map(up, st, dst)
+        stp = tree_map(up, st, dst)
         return stp
     return iterate(update, st0, T, hist=hist)

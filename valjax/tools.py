@@ -122,3 +122,10 @@ def partial(fun, *args, argnums=None):
         return fun(*args2, **kwargs1)
 
     return fun1
+
+# def partial(f, *args0, right=True):
+#     if right:
+#         f1 = lambda *args: f(*args, *args0)
+#     else:
+#         f1 = lambda *args: f(*args0, *args)
+#     return f1
