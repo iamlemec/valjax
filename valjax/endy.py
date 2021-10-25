@@ -198,44 +198,41 @@ def interp(x0, y0, x, extrap=True):
     return y
 
 ##
-## solvers
+## differentiable solvers
 ##
 
+def step_binary(f, x0, x1):
+    xm = 0.5*(x0+x1)
+    sel = f(xm) > 0
+    x0 = np.where(sel, x0, xm)
+    x1 = np.where(sel, xm, x1)
+    return x0, x1
+
 def solve_binary(f, x0, x1, K=10):
-    zx0, zx1 = x0, x1
-    zf0, zf1 = f(zx0), f(zx1)
-    sel = zf0 < zf1
+    sel = f(x0) < f(x1)
+    xi0 = np.where(sel, x0, x1)
+    xi1 = np.where(sel, x1, x0)
 
-    x0 = np.where(sel, zx0, zx1)
-    x1 = np.where(sel, zx1, zx0)
-    f0 = np.where(sel, zf0, zf1)
-    f1 = np.where(sel, zf1, zf0)
+    xf0, xf1 = iterate_while(
+        lambda x: step_binary(f, *x),
+        (xi0, xi1), K
+    )
 
-    for k in range(K):
-        xm = 0.5*(x0+x1)
-        fm = f(xm)
-        sel = fm > 0
+    return 0.5*(xf0+xf1)
 
-        x0 = np.where(sel, x0, xm)
-        x1 = np.where(sel, xm, x1)
-        f0 = np.where(sel, f0, fm)
-        f1 = np.where(sel, fm, f1)
-
-    return xm
-
-def solve_newton(f, df, x, K=10):
-    for k in range(K):
-        vf, vdf = f(x), df(x)
-        x = x - vf/vdf
-    return x
+def solve_newton(f, df, x0, K=10):
+    return iterate_while(
+        lambda x: x - f(x)/df(x),
+        x0, K
+    )
 
 def solve_combined(f, df, x0, x1, K=10):
     x = solve_binary(f, x0, x1, K=K)
     x = solve_newton(f, df, x, K=K)
     return x
 
-# assumes max_x f(x, α) form, x scalar
-def solver_diff_fwd(f, x0, x1, K=10):
+# assumes max_x f(x, *α) form, x scalar
+def solver_diff(f, x0, x1, mode='rev', K=10):
     sig = signature(f)
     nargs = len(sig.parameters)
     arg_idx = tuple(range(1, nargs))
@@ -243,7 +240,6 @@ def solver_diff_fwd(f, x0, x1, K=10):
     f_x = jax.grad(f, argnums=0)
     f_α = jax.grad(f, argnums=arg_idx)
 
-    @jax.custom_jvp
     def solve(*α):
         return solve_combined(
             lambda x: f(x, *α),
@@ -254,47 +250,30 @@ def solver_diff_fwd(f, x0, x1, K=10):
     def dsolve(x, *α):
         return tree_map(lambda a: -a/f_x(x, *α), f_α(x, *α))
 
-    @solve.defjvp
-    def solve_jvp(α, dα):
-        x = solve(*α)
-        ds = dsolve(x, *α)
-        primal_out = x
-        tangent_out = tree_reduce(add, tree_map(mul, ds, dα))
-        return primal_out, tangent_out
+    if mode in ('f', 'fwd', 'forward'):
+        def solve_jvp(α, dα):
+            x = solve(*α)
+            ds = dsolve(x, *α)
+            primal_out = x
+            tangent_out = tree_reduce(add, tree_map(mul, ds, dα))
+            return primal_out, tangent_out
 
-    return solve
+        solve1 = jax.custom_jvp(solve)
+        solve1.defjvp(solve_jvp)
+    elif mode in ('r', 'rev', 'reverse'):
+        def solve_fwd(*α):
+            x = solve(*α)
+            return x, (α, x)
 
-# assumes f(x, α) = 0 form, x scalar
-def solver_diff_rev(f, x0, x1, K=10):
-    sig = signature(f)
-    nargs = len(sig.parameters)
-    arg_idx = tuple(range(1, nargs))
+        def solve_bwd(res, g):
+            α, x = res
+            ds = dsolve(x, *α)
+            return tree_map(lambda v: v*g, ds)
 
-    f_x = jax.grad(f, argnums=0)
-    f_α = jax.grad(f, argnums=arg_idx)
+        solve1 = jax.custom_vjp(solve)
+        solve1.defvjp(solve_fwd, solve_bwd)
 
-    @jax.custom_vjp
-    def solve(*α):
-        return solve_combined(
-            lambda x: f(x, *α),
-            lambda x: f_x(x, *α),
-            x0, x1, K=K
-        )
-
-    def dsolve(x, *α):
-        return tree_map(lambda a: -a/f_x(x, *α), f_α(x, *α))
-
-    def solve_fwd(*α):
-        x = solve(*α)
-        return x, (α, x)
-
-    def solve_bwd(res, g):
-        α, x = res
-        ds = dsolve(x, *α)
-        return tree_map(lambda v: v*g, ds)
-
-    solve.defvjp(solve_fwd, solve_bwd)
-    return solve
+    return solve1
 
 ##
 ## continuous optimize
@@ -327,18 +306,25 @@ def optim_grad(df, x, step=0.01, clip=0.0, K=10):
     return x
 
 ##
-## iteration
+## control flow
 ##
 
+def iterate_while(f, x0, K):
+    z0 = 0, x0
+    cond = lambda z: z[0] < K
+    func = lambda z: (z[0] + 1, f(z[1]))
+    _, x1 = lax.while_loop(cond, func, z0)
+    return x1
+
 # state-only iteration
-def iterate(func, st0, T, hist=True):
-    tvec = np.arange(T)
-    dub = lambda x, _: 2*(func(x),)
-    last, path = lax.scan(dub, st0, tvec)
+def iterate_scan(f, x0, K, hist=True):
+    kvec = np.arange(K)
+    dub = lambda x, _: 2*(f(x),)
+    x1, xh = lax.scan(dub, x0, kvec)
     if hist:
-        return path
+        return xh
     else:
-        return last
+        return x1
 
 # simulate from tree of differential maps
 def simdiff(func, st0, Δ, T, hist=True):
@@ -347,4 +333,11 @@ def simdiff(func, st0, Δ, T, hist=True):
         dst = func(st)
         stp = tree_map(up, st, dst)
         return stp
-    return iterate(update, st0, T, hist=hist)
+    return iterate_scan(update, st0, T, hist=hist)
+
+# simplify lax switch slightly
+def blank_arg(f):
+    return lambda _: f()
+
+def switch(sel, paths):
+    return lax.switch(sel, [blank_arg(p) for p in paths], None)
