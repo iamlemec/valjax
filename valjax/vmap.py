@@ -1,8 +1,6 @@
-# pure (0d/1d) functions for use with vmap
+import jax.numpy as np
 
-# find the continuous (linearly interpolated) index of value v on grid g
-# requires monotonically incrasing g
-# inverse of interp, basically
+# easily vmap'able version with scalar v
 def grid_index(g, v, extrap=False):
     n = g.size
 
@@ -16,3 +14,4 @@ def grid_index(g, v, extrap=False):
     x = np.where(extrap, x0, xc)
 
     return i0 + x
+
