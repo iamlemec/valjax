@@ -3,6 +3,7 @@ from . import tools
 from . import grid
 from . import vmap
 from . import optim
+from . import homotopy
 
 # specific functions
 from .grid import (
@@ -12,4 +13,7 @@ from .grid import (
 from .optim import (
     solve_binary, solve_newton, solve_combined, solver_diff, optim_secant,
     optim_newton, optim_grad, optimer_diff, switch, simdiff
+)
+from .homotopy import (
+    homotopy, linear_path
 )
