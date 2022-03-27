@@ -15,5 +15,5 @@ from .optim import (
     optim_newton, optim_grad, optimer_diff, switch, simdiff
 )
 from .homotopy import (
-    homotopy, linear_path
+    homotopy, homotopy_param, linear_func, linear_param
 )
