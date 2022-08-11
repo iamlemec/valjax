@@ -5,6 +5,7 @@ from inspect import signature
 import toml
 
 import jax
+import jax.lax as lax
 import jax.numpy as np
 import jax.tree_util as tree
 
@@ -122,3 +123,55 @@ def partial(fun, *args, argnums=None):
         return fun(*args2, **kwargs1)
 
     return fun1
+
+##
+## control flow
+##
+
+def iterate_while(f, x0, K):
+    z0 = 0, x0
+    cond = lambda z: z[0] < K
+    func = lambda z: (z[0] + 1, f(z[1]))
+    _, x1 = lax.while_loop(cond, func, z0)
+    return x1
+
+# state-only iteration - this works better with differentiation
+def iterate_scan(f, x0, K, hist=False):
+    kvec = np.arange(K)
+    dub = lambda x, _: 2*(f(x),)
+    x1, xh = lax.scan(dub, x0, kvec)
+    if hist:
+        return xh
+    else:
+        return x1
+
+# simulate from tree of differential maps
+def simdiff(func, st0, Δ, T, hist=True):
+    up = lambda x, d: x + Δ*d
+    def update(st):
+        dst = func(st)
+        stp = tree_map(up, st, dst)
+        return stp
+    return iterate_scan(update, st0, T, hist=hist)
+
+# simplify lax switch slightly
+def lambdify(x):
+    return (lambda: x)
+
+def blank_arg(f):
+    return lambda _: f()
+
+def where(sel, val_true, val_false):
+    return lax.cond(sel, lambda: val_true, lambda: val_false)
+
+def choose(sel, vals):
+    return lax.switch(sel, [lambdify(x) for x in vals])
+
+def switch(sel, paths):
+    return lax.switch(sel, [blank_arg(p) for p in paths], None)
+
+##
+## trees
+##
+
+# tree_where?

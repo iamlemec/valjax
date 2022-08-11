@@ -14,4 +14,3 @@ def grid_index(g, v, extrap=False):
     x = np.where(extrap, x0, xc)
 
     return i0 + x
-

@@ -4,6 +4,8 @@ import jax.lax as lax
 from jax.tree_util import tree_map, tree_reduce
 from inspect import signature
 
+from .tools import iterate_scan, iterate_while
+
 ##
 ## differentiable solvers
 ##
@@ -20,7 +22,7 @@ def solve_binary(f, x0, x1, K=10):
     xi0 = np.where(sel, x0, x1)
     xi1 = np.where(sel, x1, x0)
 
-    xf0, xf1 = iterate_while(
+    xf0, xf1 = iterate_scan(
         lambda x: step_binary(f, *x),
         (xi0, xi1), K
     )
@@ -28,7 +30,7 @@ def solve_binary(f, x0, x1, K=10):
     return 0.5*(xf0+xf1)
 
 def solve_newton(f, df, x0, K=10):
-    return iterate_while(
+    return iterate_scan(
         lambda x: x - f(x)/df(x),
         x0, K
     )
@@ -38,7 +40,7 @@ def solve_combined(f, df, x0, x1, K=10):
     x = solve_newton(f, df, x, K=K)
     return x
 
-# assumes max_x f(x, *α) form, x scalar
+# assumes f(x, *α) form, x scalar
 def solver_diff(f, x0, x1, mode='rev', K=10):
     sig = signature(f)
     nargs = len(sig.parameters)
@@ -94,19 +96,19 @@ def step_secant(df, x0, x1):
     return x1, x2
 
 def optim_secant(df, x0, x1, K=10):
-    return iterate_while(
+    return iterate_scan(
         lambda x: step_secant(df, *x),
         (x0, x1), K
     )
 
 def optim_newton(df, ddf, x0, K=10):
-    return iterate_while(
+    return iterate_scan(
         lambda x: x - df(x)/ddf(x),
         x0, K
     )
 
 def optim_grad(df, x0, step=0.01, K=10):
-    return iterate_while(
+    return iterate_scan(
         lambda x: x + step*df(x),
         x0, K
     )
@@ -114,40 +116,3 @@ def optim_grad(df, x0, step=0.01, K=10):
 def optimer_diff(f, x0, x1, mode='rev', K=10):
     df = jax.grad(f)
     return solver_diff(df, x0, x1, mode=mode, K=K)
-
-##
-## control flow
-##
-
-def iterate_while(f, x0, K):
-    z0 = 0, x0
-    cond = lambda z: z[0] < K
-    func = lambda z: (z[0] + 1, f(z[1]))
-    _, x1 = lax.while_loop(cond, func, z0)
-    return x1
-
-# state-only iteration
-def iterate_scan(f, x0, K, hist=True):
-    kvec = np.arange(K)
-    dub = lambda x, _: 2*(f(x),)
-    x1, xh = lax.scan(dub, x0, kvec)
-    if hist:
-        return xh
-    else:
-        return x1
-
-# simulate from tree of differential maps
-def simdiff(func, st0, Δ, T, hist=True):
-    up = lambda x, d: x + Δ*d
-    def update(st):
-        dst = func(st)
-        stp = tree_map(up, st, dst)
-        return stp
-    return iterate_scan(update, st0, T, hist=hist)
-
-# simplify lax switch slightly
-def blank_arg(f):
-    return lambda _: f()
-
-def switch(sel, paths):
-    return lax.switch(sel, [blank_arg(p) for p in paths], None)
