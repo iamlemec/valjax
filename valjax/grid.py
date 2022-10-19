@@ -39,7 +39,7 @@ def address0(x, iv):
     return y
 
 # generalized axis
-def address(x, iv, axis):
+def address(x, iv, axis=-1):
     iv = ensure_tuple(iv)
     axis = ensure_tuple(axis)
 
