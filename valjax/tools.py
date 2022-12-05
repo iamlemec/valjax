@@ -52,6 +52,21 @@ def logit(x):
 def rlogit(x):
     return np.log(x/(1-x))
 
+# complex spec types
+class SpecType:
+    pass
+
+class SpecRange(SpecType):
+    def __init__(self, x0, x1):
+        self.x0 = x0
+        self.x1 = x1
+
+    def encode(self, x):
+        return rlogit((x-self.x0)/(self.x1-self.x0))
+
+    def decode(self, x):
+        return self.x0 + (self.x1-self.x0)*logit(x)
+
 # returns encode/decode pair
 def spec_funcs(s):
     if s == 'ident':
@@ -60,6 +75,8 @@ def spec_funcs(s):
         return np.log, np.exp
     elif s == 'logit':
         return rlogit, logit
+    elif isinstance(s, SpecType):
+        return s.encode, s.decode
     else:
         return s
 

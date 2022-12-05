@@ -1,7 +1,6 @@
 # finite-horizon value function optimization
 
-import valjax.endy as vj
-import valjax.tools as vt
+import valjax as vj
 
 import jax
 import jax.numpy as np
@@ -9,10 +8,10 @@ import jax.lax as lax
 
 # algo params
 alg0 = {
-    'T': 30, # time periods
     'N': 100, # grid size
-    'k_lo': 0.1, # k grid min
-    'k_hi': 3.0, # k grid max
+    'flo': 0.2, # k grid min
+    'fhi': 1.5, # k grid max
+    'ε': 1e-6 # consumption min
 }
 
 # simple parameters
@@ -23,125 +22,95 @@ par0 = {
     'z': 1.0, # productivity
 }
 
-class Model:
-    def __init__(self, alg=alg0):
-        self.spec = vt.Spec('logit')
-        self.update_alg(alg)
+class Capital:
+    def __init__(self, par, **alg):
+        self.__dict__.update({**alg0, **alg, **par0, **par})
+        self.calc_kss()
+        self.make_grid()
         self.compile_funcs()
 
-    def update_alg(self, alg):
-        self.alg = alg.copy()
-        self.make_kgrid()
+    # find steady state
+    def calc_kss(self):
+        rhs = (1-self.β)/self.β + self.δ
+        self.kss = (self.α*self.z/rhs)**(1/(1-self.α))
 
     # construct capital grid
-    def make_kgrid(self):
-        N, k_lo, k_hi = self.alg['N'], self.alg['k_lo'], self.alg['k_hi']
-        self.k_grid = np.linspace(k_lo, k_hi, N)
+    def make_grid(self):
+        self.klo, self.khi = self.flo*self.kss, self.fhi*self.kss
+        self.k_grid = np.linspace(self.klo, self.khi, self.N)
+        self.y_grid = self.prod(self.k_grid)
+        self.yd_grid = self.y_grid + (1-self.δ)*self.k_grid
 
     # vmap and jit functions
     def compile_funcs(self):
-        self.l_invest = self.spec.decoder(self.invest, arg='sp')
-        self.dl_invest = jax.grad(self.l_invest, argnums=-1)
-        self.v_invest_opt = jax.vmap(self.invest_opt, in_axes=[None, None, 0, 0])
-        self.j_solve = jax.jit(self.solve)
+        self.spec = vj.Spec(vj.SpecRange(self.klo, self.khi))
+        self.l_bellman = self.spec.decoder(self.bellman, arg='kp')
+        self.dl_bellman = jax.grad(self.l_bellman, argnums=0)
+        self.v_bellman = jax.vmap(self.bellman, in_axes=(0, 0, None))
+        self.v_policy = jax.vmap(self.policy, in_axes=(0, 0, None))
+        self.j_value_solve = jax.jit(self.value_solve, static_argnames='K')
 
-    # find steady state
-    def get_kss(self, par):
-        β, δ, z, α = par['β'], par['δ'], par['z'], par['α']
-        rhs = (1-β)/β + δ
-        kss = (α*z/rhs)**(1/(1-α))
-        return kss
-
-    # defined functions
+    # utility function
     def util(self, c):
-        ϵ = self.alg['ϵ']
-        u0 = np.log(ϵ) + (c/ϵ-1)
-        u1 = np.log(np.maximum(ϵ, c))
-        return np.where(c >= ϵ, u1, u0)
+        u0 = np.log(self.ε) + (c/self.ε-1)
+        u1 = np.log(np.maximum(self.ε, c))
+        return np.where(c >= self.ε, u1, u0)
 
-    def prod(self, z, α):
-        return z*self.k_grid**α
+    # production function
+    def prod(self, k):
+        return self.z*(k**self.α)
 
-    def invest(self, kg, vn1, yd, sp):
-        kp = sp*yd
-        vv = vj.interp(kg, vn1, kp)
-        uv = self.util(yd-kp)
-        return uv + vv
+    # compute bellman update
+    def bellman(self, kp, yd, v):
+        vp = np.interp(kp, self.k_grid, v)
+        up = self.util(yd-kp)
+        return up + self.β*vp
 
-    def invest_opt(self, kg, vn1, yd, sp0):
-        lp0 = self.spec.encode(sp0)
-        dopt = jax.partial(self.dl_invest, kg, vn1, yd)
-        lp1 = vj.optim_grad(dopt, lp0, step=1.0, clip=1.0, K=10)
-        sp1 = self.spec.decode(lp1)
-        return sp1
+    # find optimal policy
+    def policy(self, kp0, yd, v):
+        lkp0 = self.spec.encode(kp0)
+        dopt = lambda lkp: self.dl_bellman(lkp, yd, v)
+        lkp1 = vj.optim_grad(dopt, lkp0, step=0.01, K=10)
+        kp1 = self.spec.decode(lkp1)
+        return kp1
 
-    def value(self, par, grid, st, tv):
-        β = par['β']
-        kg = grid['kg']
-        yd = grid['yd']
-        vn = st['vn']
+    # one value iteration
+    def value_step(self, v, kp):
+        # calculate updates
+        v1 = self.v_bellman(kp, self.yd_grid, v)
+        kp1 = self.v_policy(kp, self.yd_grid, v)
 
-        # calculate optimal investment
-        sp0 = 0.2*np.ones_like(kg)
-        vn1 = β*vn
-        sp = self.v_invest_opt(kg, vn1, yd, sp0)
+        # compute output
+        err = np.max(np.abs(v1-v))
+        out = {'v': v1, 'kp': kp1, 'err': err}
 
-        # compute actual values
-        kp = sp*yd
-        v = self.invest(kg, vn1, yd, sp)
+        # return value
+        return (v1, kp1), out
 
-        # compute update errors
-        err = np.max(np.abs(v-vn))
+    # solve for value function
+    def value_solve(self, K=100):
+        # initial guess
+        v0 = self.util(self.yd_grid-self.δ*self.k_grid)
+        kp0 = 0.2*self.kss + 0.8*self.k_grid
 
-        # return state and output
-        stp = {
-            'vn': v,
-        }
-        out = {
-            'kp': kp,
-            'v': v,
-            'err': err,
-        }
+        # run bellman iterations
+        upd = lambda x, t: self.value_step(*x)
+        (v1, kp1), hist = lax.scan(upd, (v0, kp0), np.arange(K))
 
-        return stp, out
-
-    def solve(self, par):
-        T = self.alg['T']
-        α, δ, z = par['α'], par['δ'], par['z']
-
-        # precompute grid values
-        y_grid = self.prod(z, α)
-        yd_grid = y_grid + (1-δ)*self.k_grid
-
-        # partially apply grid
-        grid = {
-            'kg': self.k_grid,
-            'yd': yd_grid,
-        }
-        value1 = jax.partial(self.value, par, grid)
-
-        # scan over time (backwards)
-        s0 = {
-            'vn': self.util(y_grid),
-        }
-        tv = {
-            't': np.arange(T)[::-1],
-        }
-        last, path = lax.scan(value1, s0, tv)
-
-        return path
+        # return full info
+        _, ret = self.value_step(v1, kp1)
+        return v1, kp1, ret, hist
 
 ##
 ## main
 ##
 
 ## solve it
-# mod = Model(alg0)
-# kss = mod.get_kss(par0)
-# ret = mod.j_solve(par0)
+# mod = Model(par, **alg)
+# v1, kp1, ret, hist = mod.j_solve_value()
 
 ## plot it
 # fig, ax = plt.subplots()
-# ax.plot(mod.k_grid, sol['kp'][-1, :]-mod.k_grid)
-# ax.scatter(kss, 0, color='black', zorder=10)
+# ax.plot(mod.k_grid, kp1-mod.k_grid)
 # ax.hlines(0, *ax.get_xlim(), linewidth=1, linestyle='--', color='black')
+# ax.scatter(kss, 0, color='black', zorder=10)

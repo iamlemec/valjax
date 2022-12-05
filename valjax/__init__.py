@@ -6,7 +6,9 @@ from . import optim
 from . import homotopy
 
 # specific functions
-from .tools import Spec, switch, choose, simdiff
+from .tools import (
+    SpecType, SpecRange, Spec, switch, choose, simdiff
+)
 from .grid import (
     address, argmax, smoothmax, interp_address, interp_index, grid_index,
     interp

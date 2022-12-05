@@ -96,10 +96,11 @@ def step_secant(df, x0, x1):
     return x1, x2
 
 def optim_secant(df, x0, x1, K=10):
-    return iterate_scan(
+    xa, xb = iterate_scan(
         lambda x: step_secant(df, *x),
         (x0, x1), K
     )
+    return 0.5*(xa+xb)
 
 def optim_newton(df, ddf, x0, K=10):
     return iterate_scan(
