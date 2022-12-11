@@ -62,7 +62,8 @@ class Capital:
 
     # compute bellman update
     def bellman(self, kp, yd, v):
-        vp = np.interp(kp, self.k_grid, v)
+        vp = vj.cubic_spline_interp(kp, self.k_grid, v)
+        # vp = np.interp(kp, self.k_grid, v)
         up = self.util(yd-kp)
         return up + self.β*vp
 

@@ -171,12 +171,9 @@ def interp_index(g, iv, extrap=True):
 # inverse of interp, basically
 def grid_index(g, v, extrap=True):
     n = g.size
-    v = np.asarray(v)
+    s = v.shape
 
-    gx = g.reshape((n,)+(1,)*v.ndim)
-    vx = v.reshape((1,)+v.shape)
-
-    it = np.sum(vx >= gx, axis=0)
+    it = np.searchsorted(g, v.ravel()).reshape(s)
     i1 = np.clip(it, 1, n-1)
     i0 = i1 - 1
 

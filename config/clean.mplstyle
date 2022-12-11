@@ -6,7 +6,7 @@ text.color: 0.15
 
 figure.subplot.bottom: 0.15
 # figure.autolayout: True
-figure.dpi: 200
+# figure.dpi: 200
 figure.facecolor: white
 savefig.facecolor: white
 
