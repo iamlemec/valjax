@@ -71,7 +71,7 @@ class Capital:
     def policy(self, kp0, yd, v):
         lkp0 = self.spec.encode(kp0)
         dopt = lambda lkp: self.dl_bellman(lkp, yd, v)
-        lkp1 = vj.optim_grad(dopt, lkp0, step=0.01, K=10)
+        lkp1 = vj.optim_grad(dopt, lkp0, step=0.01, K=5)
         kp1 = self.spec.decode(lkp1)
         return kp1
 

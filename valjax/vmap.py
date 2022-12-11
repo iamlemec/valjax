@@ -16,20 +16,19 @@ def grid_index(g, v, extrap=False):
 
     return i0 + x
 
+# catmull-rom spline — we lose n={0,n-2,n-1}
 def cubic_spline_fit(x, f):
-    # compute bins for interior
-    p0, p1 = f[:-1], f[1:]
-    m0 = f[1:-1] - f[:-2]
-    m1 = f[2:] - f[1:-1]
-
-    # handle edge bins
-    m0 = np.hstack([m0[0], m0])
-    m1 = np.hstack([m1, m1[-1]])
+    # get different views
+    fm1 = f[:-3]
+    f00 = f[1:-2]
+    fp1 = f[2:-1]
+    fp2 = f[3:]
 
     # compute coefficients
-    c0, c1 = p0, m0
-    c2 = -3*p0 + 3*p1 - 2*m0 - m1
-    c3 = 2*p0 + m0 - 2*p1 + m1
+    c0 = f00
+    c1 = 0.5*(-fm1+fp1)
+    c2 = 0.5*(2*fm1-5*f00+4*fp1-fp2)
+    c3 = 0.5*(-fm1+3*f00-3*fp1+fp2)
 
     return c0, c1, c2, c3
 
@@ -40,7 +39,7 @@ def cubic_spline_interp(x, xp, fp, extrap=False):
     c0, c1, c2, c3 = cubic_spline_fit(xp, fp)
 
     # find upper and lower bin
-    i1 = np.clip(np.searchsorted(xp, x), 1, n-1)
+    i1 = np.clip(np.searchsorted(xp, x), 2, n-2)
     i0 = i1 - 1
     x0, x1 = xp[i0], xp[i1]
 
@@ -50,7 +49,8 @@ def cubic_spline_interp(x, xp, fp, extrap=False):
     t = np.where(extrap, t0, tc)
 
     # compute cubic polynomial
-    d0, d1, d2, d3 = c0[i0], c1[i0], c2[i0], c3[i0]
+    ic = i0 - 1 # since we lose the first bin
+    d0, d1, d2, d3 = c0[ic], c1[ic], c2[ic], c3[ic]
     ft = d0 + d1*t + d2*t**2 + d3*t**3
 
     return ft
